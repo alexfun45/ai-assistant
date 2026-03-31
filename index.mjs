@@ -18,7 +18,7 @@ import fetch from 'node-fetch';
 
 const { Telegraf, Markup, session } = telegraf;
 const sessions = {};
-const store = Redis({
+const store = new Redis({
   client: redis
 });
 
@@ -36,7 +36,7 @@ const serviceAccountAuth = new JWT({
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
-//const proxyAgent = new HttpsProxyAgent('http://user361622:lw0kic@45.91.9.172:5972');
+const proxyAgent = new HttpsProxyAgent('http://user361622:lw0kic@45.91.9.172:5972');
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
   telegram: {
