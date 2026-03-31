@@ -7,15 +7,16 @@ import { JWT } from 'google-auth-library'
 import { z } from "zod";
 import { getPriceData, getDiscount, getCategories } from './lib/sheets.js'
 import { PromptTemplate } from '@langchain/core/prompts'
-import { Telegraf } from 'telegraf'
+import telegraf from 'telegraf';
+
 import Redis from 'telegraf-session-redis';
 import { redis } from './services/redis.service.js';
-import { Markup } from 'telegraf';
 import ai_service from './services/ai.service.js'
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import fetch from 'node-fetch';
-import { session } from 'telegraf';
 
+
+const { Telegraf, Markup, session } = telegraf;
 const sessions = {};
 const store = Redis({
   client: redis
