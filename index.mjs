@@ -5,13 +5,13 @@ import { ChatOpenAI } from "@langchain/openai"
 //import { Ollama } from "@langchain/ollama"
 import { JWT } from 'google-auth-library'
 import { z } from "zod";
-import { getPriceData, getDiscount, getCategories } from './lib/sheets.js'
+import { getPriceData, getDiscount, getCategories } from './lib/sheets.mjs'
 import { PromptTemplate } from '@langchain/core/prompts'
 import telegraf from 'telegraf';
 
 import Redis from 'telegraf-session-redis';
-import { redis } from './services/redis.service.js';
-import ai_service from './services/ai.service.js'
+import { redis } from './services/redis.service.mjs';
+import ai_service from './services/ai.service.mjs'
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import fetch from 'node-fetch';
 
