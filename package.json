@@ -1,0 +1,35 @@
+{
+  "name": "ai-assistant",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "npx nodemon index.js",
+    "build": "vite build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@langchain/core": "^1.1.32",
+    "@langchain/google": "^0.1.6",
+    "@langchain/ollama": "^1.2.6",
+    "@langchain/openai": "^1.2.13",
+    "dotenv": "^17.3.1",
+    "google-auth-library": "^10.6.1",
+    "google-spreadsheet": "^5.2.0",
+    "https-proxy-agent": "^8.0.0",
+    "langchain": "^1.2.32",
+    "node-fetch": "^3.3.2",
+    "redis": "^5.11.0",
+    "telegraf": "^4.16.3",
+    "telegraf-session-redis": "^5.1.0",
+    "xstate": "^5.28.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "vite": "^8.0.0"
+  }
+}
