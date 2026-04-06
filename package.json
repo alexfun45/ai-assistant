@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "npx nodemon index.js",
+    "dev": "npx nodemon index.mjs",
     "build": "vite build"
   },
   "keywords": [],
@@ -17,6 +17,7 @@
     "@langchain/google": "^0.1.6",
     "@langchain/ollama": "^1.2.6",
     "@langchain/openai": "^1.2.13",
+    "@telegraf/session": "^2.0.0-beta.7",
     "dotenv": "^17.3.1",
     "google-auth-library": "^10.6.1",
     "google-spreadsheet": "^5.2.0",

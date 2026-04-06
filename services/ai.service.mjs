@@ -64,8 +64,14 @@ class aiService{
 
   proxyAgent = new HttpsProxyAgent('http://user361622:lw0kic@45.91.9.172:5972');
 
+  constructor(priceData, priceContext){
+    this.priceData = priceData;
+    this.priceContext = priceContext;
+  }
+
   // получение истории чата
   getChatHistoryString(userSessions){
+    console.log('userSessions', userSessions);
     if (!userSessions) return "История пуста.";
     // Берем последние 6 реплик, чтобы не раздувать контекст
     return userSessions.chat.slice(-6).join("\n");
@@ -75,21 +81,26 @@ class aiService{
   handleUserMessage = async (ctx) => {
     const userId = ctx.message.from.id;
     // 1. Получаем или создаем сессию
-    const sessionData = await redis.get(`session:${userId}`);
-    const session = sessionData ? JSON.parse(sessionData) : {state: STATES.IDLE, cart: [], chat: [], pendingItem: null, lastViewedProductId:null };
-       
+    //const sessionData = await redis.get(`session:${userId}`);
+    //const session = sessionData ? JSON.parse(sessionData) : {state: STATES.IDLE, cart: [], chat: [], pendingItem: null, lastViewedProductId:null };
+    const session = ctx.session;
     //const history = session.chat;
     const userQuery = ctx.message.text;
-    const chatHistory = getChatHistoryString(session);
+    const chatHistory = this.getChatHistoryString(session);
     const prompt = await template.invoke({
-      context: priceContext,
+      context: this.priceContext,
       chat_history: chatHistory,
       question: userQuery
     });
     const aiRes = await structuredModel.invoke(prompt);
+    console.log(aiRes);
     session.chat.push(`Human: ${userQuery}`, `AI: ${aiRes.text}`);
-    return handleIntent(session, aiRes);
+    return this.handleIntent(session, aiRes);
 }
+
+findProduct(id){
+  return this.priceData.find(p => String(p.id) === String(id));
+};
 
   handleIntent(session, aiRes) {
     const { intent, productId, quantity, text } = aiRes;
@@ -100,17 +111,31 @@ class aiService{
     switch (intent) {
       case 'add_to_cart':
         // Запоминаем, что пользователь ХОЧЕТ добавить, но ждем подтверждения
-        const productInfo = findProduct(productId);
-        console.log('productInfo', productInfo);
+        const productInfo = this.findProduct(productId);
         session.pendingAction = { type: 'ADD', productId, quantity, name: productInfo.name, price: productInfo.price, quantity: quantity || 1 };
-        session.cart.push(session.pendingAction);
+        const isChanged = session.cart.some((item, index, arr)=>{
+          if(item.productId==productId){
+            item.quantity++;
+            item.price*2;
+            return true;
+          }
+        })
+        if(!isChanged) 
+          session.cart.push(session.pendingAction);
         session.pendingAction = null;
         return { message: text };
 
       case 'confirm':
         if (session.pendingAction?.type === 'ADD') {
           const item = session.pendingAction;
-          session.cart.push(item); // Добавляем в реальную корзину
+          const isChanged = session.cart.some((item, index, arr)=>{
+            if(item.productId==productId){
+              item.quantity++;
+              return true;
+            }
+          })
+          if(!isChanged) 
+            session.cart.push(item);
           session.pendingAction = null;
           return { message: "✅ Добавлено в расчет! " + text };
         }
@@ -145,7 +170,7 @@ class aiService{
 
 }
 
-const ai_service = new aiService();
+//const ai_service = new aiService();
 
-export default ai_service
+export default aiService
  
