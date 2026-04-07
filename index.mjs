@@ -13,6 +13,9 @@ import { Redis } from '@telegraf/session/redis';
 import { initRedis } from './services/redis.service.mjs';
 import aiService from './services/ai.service.mjs'
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import puppeteer from 'puppeteer';
+import fs from 'fs';
+import {generateHTML} from './lib/pdfReport.mjs'
 import fetch from 'node-fetch';
 import { createClient } from 'redis';
 
@@ -28,7 +31,7 @@ const proxyAgent = new HttpsProxyAgent('http://user361622:lw0kic@185.121.227.29:
   );
 
   const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
-    telegram: { agent: proxyAgent }
+    //telegram: { agent: proxyAgent }
   });
 
   bot.use(session({ store }));
@@ -55,36 +58,6 @@ const STATES = {
   COLLECTING_DATA: 'COLLECTING_DATA' // Собираем данные для КП (ФИО, почта)
 };
 
-// 1. Настройка Google Auth
-const serviceAccountAuth = new JWT({
-  email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-  key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
-
-
- const template = PromptTemplate.fromTemplate(`
-  Ты — ядро системы «Умный Склад». Ответь вежливо, используя данные из контекста. 
-  Твоя задача: анализировать запрос и возвращать данные строго по схеме.
-  Если пользователь ищет подходящий товар назови название подходящего товара, его стоимость и артикул товара. Спроси: Добавить в расчет? 
-  Если подходящего товара нет, можешь предложить наиболее близкий аналог но только из существующих позиций в контексте, указав что по данным критериям среди текущих позиций ты найти не смог, но можешь предложить наиболее подходящий вариант. 
-  Если похожих аналогов нет, то скажи что по заданному запросу ничего не можешь найти.
-  Если пользователь подтверждает добавление товара, но не называет артикул заново, используй артикул из предыдущего сообщения AI в истории диалога.
-  Контекст Прайса: {context}
-  История последних сообщений:
-  {chat_history}
-  \n
-  Текущий запрос пользователя: {question}
-  Ответ в формате JSON:
- `);
-
-const getChatHistoryString = (userSessions) => {
-  if (!userSessions) return "История пуста.";
-  // Берем последние 6 реплик, чтобы не раздувать контекст
-  return userSessions.chat.slice(-6).join("\n");
-};
-
-
 const [priceContext, priceData] = await getPriceData();
 const ai_service = new aiService(priceData, priceContext);
 
@@ -96,15 +69,13 @@ async function showCart(ctx) {
     return ctx.reply("🛒 Ваша корзина пока пуста. Найти что-нибудь?");
   }
 
-  // 1. Сначала удаляем старое сообщение, если это был клик по кнопке, 
-  // чтобы не забивать чат дублями при перерисовке всей корзины
+  
   if (ctx.updateType === 'callback_query') {
     try { await ctx.deleteMessage(); } catch (e) {}
   }
 
   let totalSum = 0;
 
-  // 2. Проходим циклом по товарам и отправляем КАЖДЫЙ отдельным сообщением
   for (const item of session.cart) {
     const itemTotal = item.price * (item.quantity || 1);
     totalSum += itemTotal;
@@ -238,14 +209,9 @@ async function createProductListButtons(ctx, products){
     await ctx.reply(message, { parse_mode: 'Markdown', ...keyboard });
   }
 
-  // В конце можно прислать кнопку возврата
   await ctx.reply('---', Markup.inlineKeyboard([
     [Markup.button.callback('⬅️ Вернуться в каталог', 'catalog_main')]
   ]));
-}
-
-async function make_kp(){
-
 }
 
 async function clear_cart(ctx){
@@ -258,13 +224,66 @@ function findProduct(id){
   return priceData.find(p => String(p.id) === String(id));
 };
 
+async function createPDFAndSend(ctx, orderId, totalSum) {
+  const html = generateHTML(
+      { orderId, clientName: ctx.session.orderData.clientName, contact: ctx.session.orderData.contact },
+      ctx.session.cart,
+      totalSum
+  );
+
+  const browser = await puppeteer.launch({ 
+      args: ['--no-sandbox', '--disable-setuid-sandbox'] // Важно для запуска на Linux/Docker
+  });
+  const page = await browser.newPage();
+  await page.setContent(html);
+  
+  const pdfPath = `./orders/order_${orderId}.pdf`;
+  
+  // Создаем папку, если её нет
+  if (!fs.existsSync('./orders')) fs.mkdirSync('./orders');
+
+  await page.pdf({ 
+      path: pdfPath, 
+      format: 'A4',
+      printBackground: true 
+  });
+
+  await browser.close();
+
+  // Отправляем файл пользователю
+  await ctx.replyWithDocument({ source: pdfPath, filename: `КП_${orderId}.pdf` });
+  
+  // Удаляем файл после отправки, чтобы не копились
+  // fs.unlinkSync(pdfPath); 
+}
+
+async function make_kp(ctx){
+  const session = ctx.session;
+
+  // 1. Проверяем, есть ли что-то в корзине перед началом опроса
+  if (!session.cart || session.cart.length === 0) {
+    return ctx.reply('⚠️ Ваша корзина пуста. Добавьте товары, чтобы сформировать предложение.');
+  }
+  
+  // 2. Переключаем состояние (стейт)
+  session.state = STATES.COLLECTING_DATA;
+  
+  // 3. Инициализируем временное хранилище для данных анкеты
+  session.orderData = { 
+    step: 'NAME' 
+  }; 
+  
+  await ctx.reply('🚀 Начинаем оформление КП.\n\nВведите ФИО или название организации заказчика:');
+}
+
+bot.action("cart_checkout", make_kp); 
+
 bot.action(/^tocart_(.+)$/, async(ctx) => {
   const productId = ctx.match[1];
-  const item = ctx.session.cart.find(p => String(p.id) === productId);
   const productInfo = findProduct(productId);
   const pendingAction = { type: 'ADD', quantity: 1, ...productInfo};
   const isChanged = ctx.session.cart.some((item, index, arr)=>{
-      if(item.productId==productId){
+      if(item.id==productId){
           item.quantity++;
           item.price*2;
           return true;
@@ -283,36 +302,21 @@ bot.action(/^cat_(.+)$/, async (ctx) => {
 
 bot.action('📦 Каталог товаров', showCategories);
 
-bot.hears('📄 Оформить заказ', async (ctx) => {
-  const session = ctx.session;
-
-  // 1. Проверяем, есть ли что-то в корзине перед началом опроса
-  if (!session.cart || session.cart.length === 0) {
-    return ctx.reply('⚠️ Ваша корзина пуста. Добавьте товары, чтобы сформировать предложение.');
-  }
-  
-  // 2. Переключаем состояние (стейт)
-  session.state = STATES.COLLECTING_DATA;
-  
-  // 3. Инициализируем временное хранилище для данных анкеты
-  session.orderData = { 
-    step: 'NAME' 
-  }; 
-  
-  await ctx.reply('🚀 Начинаем оформление КП.\n\nВведите ФИО или название организации заказчика:');
-});
+bot.hears('📄 Оформить заказ', make_kp);
 
 bot.action('order_confirm', async (ctx) => {
   const session = ctx.session;
   
   try {
     await ctx.reply('⏳ Сохраняю данные в таблицу...');
-    
+    await ctx.reply('⏳ Формирую документы...');
+    const total = session.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     // Вызываем функцию записи (код из предыдущего сообщения)
     const orderId = await saveOrderToSheets(ctx);
-    
+    await createPDFAndSend(ctx, orderId, total);
     await ctx.reply(`✅ КП успешно сформировано!\nНомер заказа: ${orderId}\nМенеджер свяжется с вами.`);
-    
+    await ctx.reply(`✅ Все готово! КП отправлено файлом выше.`);
+
     // Очищаем корзину и сбрасываем состояние
     session.cart = [];
     session.state = STATES.IDLE;
@@ -320,10 +324,12 @@ bot.action('order_confirm', async (ctx) => {
 
   } catch (error) {
     console.error(error);
-    await ctx.reply('❌ Ошибка при сохранении в Google Sheets. Попробуйте позже.');
+    await ctx.reply('❌ Ошибка при сохранении. Попробуйте позже.');
   }
   await ctx.answerCbQuery();
 });
+
+
 
 bot.action('order_cancel', async (ctx) => {
   ctx.session.state = STATES.IDLE;
@@ -350,8 +356,6 @@ bot.on('text', async (ctx) => {
   }
   else if(!ctx.session.orderData)
     ctx.session.orderData = {step: ''};
-
-  console.log('session', session);
  
   if (session.orderData.step === 'NAME') {
     session.orderData.clientName = messageText;
