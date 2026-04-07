@@ -42,7 +42,7 @@ const proxyAgent = new HttpsProxyAgent('http://user361622:lw0kic@45.91.9.172:597
     reply_markup: {
       keyboard: [
         [{text: "📦 Каталог товаров"}],
-        [{ text: "🛒 Показать корзину"}, { text: "📄 Сформировать PDF" }],
+        [{ text: "🛒 Показать корзину"}, { text: "📄 Сформировать КП" }],
         [{ text: "❓ Помощь" }, { text: "🧹 Очистить" }]
       ],
       resize_keyboard: true // Чтобы кнопки были аккуратными, а не на пол-экрана
@@ -64,55 +64,6 @@ const serviceAccountAuth = new JWT({
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
-
-const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID, serviceAccountAuth);
-
-const discounts = await getDiscount();
-
-/*
-const responseSchema = z.object({
-  intent: z.enum(["search", "add_to_cart", "confirm", "cancel", "greeting", "view_cart"])
-    .describe(`
-    Классификация намерения:
-    - search: поиск товара или вопрос о цене/наличии.
-    - add_to_cart: четкое желание добавить товар в расчет (например "Добавь 5 штук").
-    
-    - cancel: отказ или просьба удалить ("Нет", "Удали", "Не надо").
-    - view_cart: просьба показать текущий список товаров в расчете или итоговую сумму.
-    - greeting: простое приветствие.
-    `),
-  productId: z.string().optional()
-    .describe("Артикул товара из прайса (только цифры/ID)"),
-  quantity: z.number().optional().default(1)
-    .describe("Количество товара, которое упомянул пользователь"),
-  text: z.string()
-    .describe("Твой вежливый ответ пользователю на русском языке")
-});
-
-const model = new ChatOpenAI({
-  openAIApiKey: process.env.OPENAI_API_KEY,
-  configuration: {
-    baseURL: "https://openrouter.ai/api/v1",
-    defaultHeaders: {
-      "HTTP-Referer": "http://localhost:3000", // Обязательно для OpenRouter
-      "X-OpenRouter-Title": "Biz Assistant Project",
-      'Content-Type': 'application/json',
-    },
-  },
-  model: "google/gemini-3.1-flash-lite-preview", 
-  temperature: 0.3,
-}); 
-
-const structuredModel = model.withStructuredOutput(responseSchema);*/
-
-
-/*const template = ChatPromptTemplate.fromMessages([
-  ['system', "Ты — умный бизнес-ассистент. Ответь вежливо, используя данные из конекста. Если товара нет, предложи альтернативу"],
-  ['human', 'Context: {context}'],
-  ['human', 'Question: {question}'],
-])*/
-
- const userSessions = {};
 
  const template = PromptTemplate.fromTemplate(`
   Ты — ядро системы «Умный Склад». Ответь вежливо, используя данные из контекста. 
@@ -139,36 +90,55 @@ const getChatHistoryString = (userSessions) => {
 const [priceContext, priceData] = await getPriceData();
 const ai_service = new aiService(priceData, priceContext);
 
-const handleUserMessage = async (ctx) => {
-  const userId = ctx.message.from.id;
-  // 1. Получаем или создаем сессию
-  if (!sessions[userId]) {
-      sessions[userId] = { state: STATES.IDLE, chat: [], cart: [], pendingItem: null };
+
+async function showCart(ctx) {
+  const session = ctx.session;
+
+  if (!session.cart || session.cart.length === 0) {
+    return ctx.reply("🛒 Ваша корзина пока пуста. Найти что-нибудь?");
   }
-  const session = sessions[userId];
-  //const history = session.chat;
-  const userQuery = ctx.message.text;
-  const chatHistory = getChatHistoryString(session);
-  const prompt = await template.invoke({
-    context: priceContext,
-    chat_history: chatHistory,
-    question: userQuery
-  });
-  const aiRes = await structuredModel.invoke(prompt);
-  sessions[userId].chat.push(aiRes.text);
-  return handleIntent(session, aiRes);
+
+  // 1. Сначала удаляем старое сообщение, если это был клик по кнопке, 
+  // чтобы не забивать чат дублями при перерисовке всей корзины
+  if (ctx.updateType === 'callback_query') {
+    try { await ctx.deleteMessage(); } catch (e) {}
+  }
+
+  let totalSum = 0;
+
+  // 2. Проходим циклом по товарам и отправляем КАЖДЫЙ отдельным сообщением
+  for (const item of session.cart) {
+    const itemTotal = item.price * (item.quantity || 1);
+    totalSum += itemTotal;
+
+    const message = `📦 **${item.name}**\n💰 ${item.price} руб. x ${item.quantity} шт. = ${itemTotal} руб.`;
+    
+    const keyboard = Markup.inlineKeyboard([
+      [
+        Markup.button.callback('➖', `cart_minus_${item.id}`),
+        Markup.button.callback(`${item.quantity} шт.`, `ignore`),
+        Markup.button.callback('➕', `cart_plus_${item.id}`),
+        Markup.button.callback('❌', `cart_del_${item.id}`)
+      ]
+    ]);
+
+    await ctx.reply(message, { parse_mode: 'Markdown', ...keyboard });
+  }
+
+  // 3. Финальное сообщение с итогом и общими кнопками
+  const finalMessage = `ИТОГО К ОПЛАТЕ: **${totalSum} руб.**`;
+  const finalKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('🧹 Очистить всё', 'cart_clear')],
+    [Markup.button.callback('📄 Оформить заказ', 'cart_checkout')]
+  ]);
+
+  await ctx.reply(finalMessage, { parse_mode: 'Markdown', ...finalKeyboard });
 }
 
-const findProduct = (id) => {
-  return priceData.find(p => String(p.id) === String(id));
-};
-
-
-async function showCart(ctx){
-  console.log('корзина');
+async function showCart2(ctx){
   const session = ctx.session;
   if (!session.cart || session.cart.length === 0) {
-    return { message: "Ваша корзина пока пуста. Найти что-нибудь?" };
+    ctx.reply("Ваша корзина пока пуста. Найти что-нибудь?");
   }
 
   let totalSum = 0;
@@ -257,32 +227,62 @@ async function showCategories(ctx){
   );
 }
 
-function createProductListButtons(products){
-  return products.map((product)=>{
-    return [
-      Markup.button.callback(
-        `${product.name} — ${product.price} руб.`, 
-        `cart_${product.id}`
-      )
-    ];
+async function createProductListButtons(ctx, products){
+
+  const keyboard = [];
+  
+  for (const item of products) {
+    const message = `📦 **${item.name}**\n💰 Цена: ${item.price} руб.`;
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('➕ Добавить в расчет', `tocart_${item.id}`)]
+    ]);
+
+    await ctx.reply(message, { parse_mode: 'Markdown', ...keyboard });
   }
-  )
+
+  // В конце можно прислать кнопку возврата
+  await ctx.reply('---', Markup.inlineKeyboard([
+    [Markup.button.callback('⬅️ Вернуться в каталог', 'catalog_main')]
+  ]));
+}
+
+async function make_kp(){
+
 }
 
 async function clear_cart(ctx){
-  console.log('очистить корзину');
   ctx.session.cart = [];
   ctx.session.state = STATES.IDLE;
   await ctx.reply('Ваша корзина очищена');
 }
 
+function findProduct(id){
+  return priceData.find(p => String(p.id) === String(id));
+};
+
+bot.action(/^tocart_(.+)$/, async(ctx) => {
+  const productId = ctx.match[1];
+  const item = ctx.session.cart.find(p => String(p.id) === productId);
+  const productInfo = findProduct(productId);
+  const pendingAction = { type: 'ADD', quantity: 1, ...productInfo};
+  const isChanged = ctx.session.cart.some((item, index, arr)=>{
+      if(item.productId==productId){
+          item.quantity++;
+          item.price*2;
+          return true;
+        }
+      })
+      if(!isChanged) 
+          ctx.session.cart.push(pendingAction);
+    ctx.reply('Товар добавлен в корзину');
+})
+
 bot.action(/^cat_(.+)$/, async (ctx) => {
   const categoryId = ctx.match[1];
-  // Фильтруем прайс по категории и выдаем список товаров с кнопками [add_ID]
   const products = priceData.filter(p => p.category === categoryId);
-  const keyboard = createProductListButtons(products);
-  keyboard.push([Markup.button.callback('⬅️ Назад в категории', '📦 Каталог товаров')]);
-  await ctx.reply(`Товары в категории ${categoryId}:`, Markup.inlineKeyboard(keyboard));
+  createProductListButtons(ctx, products);
+  //keyboard.push([Markup.button.callback('⬅️ Назад в категории', '📦 Каталог товаров')]);
+  //await ctx.reply(`Товары в категории ${categoryId}:`, Markup.inlineKeyboard(keyboard));
 });
 
 bot.action('📦 Каталог товаров', showCategories);
@@ -298,22 +298,17 @@ bot.on('text', async (ctx) => {
 
   const messageText = ctx.message.text;
 
-  const menuButtons = ['📦 Каталог товаров', '🛒 Показать корзину', '🧹 Очистить', '📄 Оформить КП'];
+  const menuButtons = ['📦 Каталог товаров', '🛒 Показать корзину', '🧹 Очистить', '📄 Сформировать КП'];
   
   if (menuButtons.includes(messageText)) {
     
     // Вызываем функции навигации БЕЗ ИИ
     if (messageText === '📦 Каталог товаров') return showCategories(ctx);
-    if (messageText === '🛒 Показать корзину'){ console.log('grw'); return showCart(ctx);}
+    if (messageText === '🛒 Показать корзину'){ return showCart(ctx);}
+    if (messageText === '📄 Сформировать КП'){ return make_kp(ctx);}
     if (messageText === "🧹 Очистить") return clear_cart(ctx);
     return;
   }
   const res = await ai_service.handleUserMessage(ctx);
   ctx.reply(res.message);
-  /*if(ai_mod){
-    let res = await handleUserMessage(ctx);
-    if(res)
-      ctx.reply(res.message);
-  }*/
 });
-//console.log('Бизнес-ассистент запущен!');

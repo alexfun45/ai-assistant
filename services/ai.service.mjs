@@ -11,12 +11,12 @@ const STATES = {
 };
 
 const responseSchema = z.object({
-  intent: z.enum(["search", "add_to_cart", "confirm", "cancel", "greeting", "view_cart"])
+  intent: z.enum(["search", "add_to_cart", "make_kp", "cancel", "greeting", "view_cart"])
     .describe(`
     Классификация намерения:
     - search: поиск товара или вопрос о цене/наличии.
     - add_to_cart: четкое желание добавить товар в расчет (например "Добавь 5 штук").
-    
+    - make_kp: желание сформировать коммерческое предложение или оформить заказ
     - cancel: отказ или просьба удалить ("Нет", "Удали", "Не надо").
     - view_cart: просьба показать текущий список товаров в расчете или итоговую сумму.
     - greeting: простое приветствие.
@@ -62,7 +62,7 @@ const template = PromptTemplate.fromTemplate(`
 
 class aiService{
 
-  proxyAgent = new HttpsProxyAgent('http://user361622:lw0kic@45.91.9.172:5972');
+  proxyAgent = new HttpsProxyAgent('http://user361622:lw0kic@185.121.227.29:9842');
 
   constructor(priceData, priceContext){
     this.priceData = priceData;
@@ -93,7 +93,7 @@ class aiService{
       question: userQuery
     });
     const aiRes = await structuredModel.invoke(prompt);
-    console.log(aiRes);
+
     session.chat.push(`Human: ${userQuery}`, `AI: ${aiRes.text}`);
     return this.handleIntent(session, aiRes);
 }
