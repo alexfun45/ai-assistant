@@ -71,7 +71,6 @@ class aiService{
 
   // получение истории чата
   getChatHistoryString(userSessions){
-    console.log('userSessions', userSessions);
     if (!userSessions) return "История пуста.";
     // Берем последние 6 реплик, чтобы не раздувать контекст
     return userSessions.chat.slice(-6).join("\n");
@@ -144,7 +143,12 @@ findProduct(id){
       case 'cancel':
         session.pendingAction = null;
         return { message: "Хорошо, отменил. " + text };
-
+      case 'make_kp':
+        session.state = STATES.COLLECTING_DATA;
+        session.orderData = { 
+          step: 'NAME' 
+        }; 
+        return { message: "🚀 Начинаем оформление КП.\n\nВведите ФИО или название организации заказчика:"}
       case 'view_cart':
           if (!session.cart || session.cart.length === 0) {
             return { message: "Ваша корзина пока пуста. Найти что-нибудь?" };

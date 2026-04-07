@@ -5,7 +5,7 @@ import { ChatOpenAI } from "@langchain/openai"
 //import { Ollama } from "@langchain/ollama"
 import { JWT } from 'google-auth-library'
 import { z } from "zod";
-import { getPriceData, getDiscount, getCategories } from './lib/sheets.mjs'
+import { getPriceData, getDiscount, getCategories, saveOrderToSheets } from './lib/sheets.mjs'
 import { PromptTemplate } from '@langchain/core/prompts'
 import telegraf from 'telegraf';
 import { session } from 'telegraf';
@@ -18,11 +18,10 @@ import { createClient } from 'redis';
 
 const { Telegraf, Markup } = telegraf;
 
-const proxyAgent = new HttpsProxyAgent('http://user361622:lw0kic@45.91.9.172:5972');
+const proxyAgent = new HttpsProxyAgent('http://user361622:lw0kic@185.121.227.29:9842');
 
 //async function launch() {
-  const connectedClient = await initRedis(); // Сначала подключаем базу
-  const client = createClient({ url: 'redis://localhost:6379' });
+  const connectedClient = await initRedis(); 
   const store = Redis({
     connectedClient
     }
@@ -38,11 +37,10 @@ const proxyAgent = new HttpsProxyAgent('http://user361622:lw0kic@45.91.9.172:597
   console.log('Бизнес-ассистент запущен!');
   bot.start((ctx) => ctx.reply('Добро пожаловать в бот умного ассистента! Задайте вопрос какой товар вы бы хотели найти',
      {
-    
     reply_markup: {
       keyboard: [
         [{text: "📦 Каталог товаров"}],
-        [{ text: "🛒 Показать корзину"}, { text: "📄 Сформировать КП" }],
+        [{ text: "🛒 Показать корзину"}, { text: "📄 Оформить заказ" }],
         [{ text: "❓ Помощь" }, { text: "🧹 Очистить" }]
       ],
       resize_keyboard: true // Чтобы кнопки были аккуратными, а не на пол-экрана
@@ -281,31 +279,109 @@ bot.action(/^cat_(.+)$/, async (ctx) => {
   const categoryId = ctx.match[1];
   const products = priceData.filter(p => p.category === categoryId);
   createProductListButtons(ctx, products);
-  //keyboard.push([Markup.button.callback('⬅️ Назад в категории', '📦 Каталог товаров')]);
-  //await ctx.reply(`Товары в категории ${categoryId}:`, Markup.inlineKeyboard(keyboard));
 });
 
 bot.action('📦 Каталог товаров', showCategories);
 
+bot.hears('📄 Оформить заказ', async (ctx) => {
+  const session = ctx.session;
+
+  // 1. Проверяем, есть ли что-то в корзине перед началом опроса
+  if (!session.cart || session.cart.length === 0) {
+    return ctx.reply('⚠️ Ваша корзина пуста. Добавьте товары, чтобы сформировать предложение.');
+  }
+  
+  // 2. Переключаем состояние (стейт)
+  session.state = STATES.COLLECTING_DATA;
+  
+  // 3. Инициализируем временное хранилище для данных анкеты
+  session.orderData = { 
+    step: 'NAME' 
+  }; 
+  
+  await ctx.reply('🚀 Начинаем оформление КП.\n\nВведите ФИО или название организации заказчика:');
+});
+
+bot.action('order_confirm', async (ctx) => {
+  const session = ctx.session;
+  
+  try {
+    await ctx.reply('⏳ Сохраняю данные в таблицу...');
+    
+    // Вызываем функцию записи (код из предыдущего сообщения)
+    const orderId = await saveOrderToSheets(ctx);
+    
+    await ctx.reply(`✅ КП успешно сформировано!\nНомер заказа: ${orderId}\nМенеджер свяжется с вами.`);
+    
+    // Очищаем корзину и сбрасываем состояние
+    session.cart = [];
+    session.state = STATES.IDLE;
+    session.orderData = null;
+
+  } catch (error) {
+    console.error(error);
+    await ctx.reply('❌ Ошибка при сохранении в Google Sheets. Попробуйте позже.');
+  }
+  await ctx.answerCbQuery();
+});
+
+bot.action('order_cancel', async (ctx) => {
+  ctx.session.state = STATES.IDLE;
+  ctx.session.orderData = null;
+  await ctx.reply('Оформление отменено. Вы вернулись в обычный режим.');
+  await ctx.answerCbQuery();
+});
+
 bot.on('text', async (ctx) => {
+  let session = ctx.session;
+  session ??= { state: STATES.IDLE, cart: [], chat: [], orderData: {step: STATES.COLLECTING_DATA}, pendingItem: null, lastViewedProductId:null };
+  session.cart ??= [];
+  session.state ??= STATES.IDLE;
+  session.chat ??= [];
+  session.pendingItem ??= null;
+  session.lastViewedProductId ??= null;
  
-  ctx.session ??= { state: STATES.IDLE, cart: [], chat: [], pendingItem: null, lastViewedProductId:null };
-  ctx.session.cart ??= [];
-  ctx.session.state ??= STATES.IDLE;
-  ctx.session.chat ??= [];
-  ctx.session.pendingItem ??= null;
-  ctx.session.lastViewedProductId ??= null;
-
   const messageText = ctx.message.text;
+  
 
-  const menuButtons = ['📦 Каталог товаров', '🛒 Показать корзину', '🧹 Очистить', '📄 Сформировать КП'];
+  if (session.state === STATES.COLLECTING_DATA && !ctx.session.orderData) {
+    ctx.session.orderData = { step: 'NAME' };
+    session.orderData.step = session.orderData.step;
+  }
+  else if(!ctx.session.orderData)
+    ctx.session.orderData = {step: ''};
+
+  console.log('session', session);
+ 
+  if (session.orderData.step === 'NAME') {
+    session.orderData.clientName = messageText;
+    session.orderData.step = 'CONTACT';
+    return ctx.reply('Принято. Теперь введите контактный телефон или Email:');
+  }
+ 
+  if (session.orderData.step === 'CONTACT') {
+    session.orderData.contact = messageText;
+    session.orderData.step = 'CONFIRM';
+    
+    const summary = `📋 **Проверьте данные КП:**\n\n` +
+                    `👤 Клиент: ${session.orderData.clientName}\n` +
+                    `📞 Контакт: ${session.orderData.contact}\n` +
+                    `🛒 Товаров: ${session.cart.length} поз.`;
+
+    return ctx.reply(summary, Markup.inlineKeyboard([
+      [Markup.button.callback('✅ Все верно, создать', 'order_confirm')],
+      [Markup.button.callback('❌ Отмена', 'order_cancel')]
+    ]));
+  }
+
+  const menuButtons = ['📦 Каталог товаров', '🛒 Показать корзину', '🧹 Очистить', '📄 Оформить заказ'];
   
   if (menuButtons.includes(messageText)) {
     
     // Вызываем функции навигации БЕЗ ИИ
     if (messageText === '📦 Каталог товаров') return showCategories(ctx);
     if (messageText === '🛒 Показать корзину'){ return showCart(ctx);}
-    if (messageText === '📄 Сформировать КП'){ return make_kp(ctx);}
+    if (messageText === '📄 Оформить заказ'){ return;}
     if (messageText === "🧹 Очистить") return clear_cart(ctx);
     return;
   }
